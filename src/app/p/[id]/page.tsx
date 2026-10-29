@@ -46,7 +46,8 @@ export default async function PublicPropertyPage({ params, searchParams }: Props
         brief={c.brief}
         content={content}
         banner={
-          <div className="fixed bottom-3 left-1/2 z-50 flex max-w-[calc(100vw-1.5rem)] -translate-x-1/2 items-center gap-3 rounded-[3px] bg-ink/90 px-3 py-2 text-[0.7rem] tracking-wide text-paper/85 shadow-lg backdrop-blur">
+          // The status pill is for authors: shown on drafts and historical versions, not the live page.
+          (sp.view === "draft" || sp.v) && <div className="fixed bottom-3 left-1/2 z-50 flex max-w-[calc(100vw-1.5rem)] -translate-x-1/2 items-center gap-3 rounded-[3px] bg-ink/90 px-3 py-2 text-[0.7rem] tracking-wide text-paper/85 shadow-lg backdrop-blur">
             <span className={sp.view === "draft" ? "text-warn-soft" : ""}>{label}</span>
             {sp.embed !== "1" && (
               <Link href={`/campaigns/${c.id}/studio`} className="whitespace-nowrap underline underline-offset-2 hover:text-paper">

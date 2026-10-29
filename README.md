@@ -1,4 +1,10 @@
-# PresenceOS — AI Luxury Marketing Studio (prototype)
+# PresenceOS — AI Luxury Marketing Studio
+
+**Twelve AI agents draft a luxury real-estate campaign. A person approves every change. Facts are protected by design.**
+
+Next.js 16 · TypeScript · Tailwind CSS · Zod · Claude API (optional) · 36 tests · Product case study by **Karyme Ortega**
+
+![A generated property page: "An Ocean-View Villa in Conchas Chinas", Puerto Vallarta](docs/screenshots/property.jpg)
 
 PresenceOS turns a luxury property brief into a coordinated, reviewed marketing campaign: an editorial
 property landing page, listing copy and headline alternatives, social posts, a reel script, brand
@@ -7,7 +13,19 @@ them, validates their outputs, surfaces disagreements and protects facts. **A hu
 change** before it reaches the live page.
 
 > Independent product prototype. Not affiliated with any brokerage or real-estate platform.
-> The sample property (Casa Tezontle, Mexico City) is fictional; photos are stock imagery.
+> All example properties are fictional; photos are stock imagery.
+
+### Why it is different
+- **Disagreements are surfaced, not hidden.** When the copywriter and the SEO agent want different headlines, the Builder shows the trade-off and recommends one, and you decide.
+- **Facts can't be invented.** Every proposal is checked against the verified fact sheet. An unverified "forest view" or "beach access" is blocked, and QA proposes a corrected version.
+- **Nothing goes live without approval.** Approved changes create immutable versions with a full changelog and one-click restore.
+- **Iterations are targeted.** "Make the copy more concise" reruns 7 of 12 agents and reuses the rest.
+
+| Review queue: conflicts with trade-offs | Agent control center |
+|---|---|
+| ![Review queue showing two agents' competing calls to action, the trade-off and the Builder's recommendation](docs/screenshots/review.jpg) | ![Agent control center: twelve agents in dependency stages with status, timing and acceptance criteria](docs/screenshots/agents.jpg) |
+| **Overview** | **Quality gate** |
+| ![Overview with the product pitch and the example campaigns](docs/screenshots/overview.jpg) | ![Quality page: critical issues block approval until resolved](docs/screenshots/quality.jpg) |
 
 ## Run it
 
