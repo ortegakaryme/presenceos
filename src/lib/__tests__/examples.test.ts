@@ -69,32 +69,47 @@ describe("example campaigns", () => {
   });
 });
 
-describe("seeding and deletion", () => {
+describe("seeded examples", () => {
   let svc: typeof import("@/lib/server/campaigns");
   beforeAll(async () => {
     process.env.PRESENCE_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "presenceos-seed-"));
     svc = await import("@/lib/server/campaigns");
   });
 
-  it("seeds five labelled examples once, and does not re-add deleted ones", async () => {
-    await svc.ensureExamples();
-    const cs = (await svc.listCampaigns());
-    expect(cs).toHaveLength(5);
-    expect(cs.every((c) => c.origin === "example")).toBe(true);
-    const applied = cs.filter((c) => c.currentVersion === 2);
-    expect(applied).toHaveLength(4);
-    for (const c of applied) expect(c.changelog.filter((l) => l.version === 2).every((l) => l.approval === "example_seed")).toBe(true);
-    expect(cs.find((c) => c.brief.name === "Casa Tezontle")!.currentVersion).toBe(1);
+  it("uses fixed ids and builds identical campaigns every time (any instance)", async () => {
+    expect(EXAMPLES.map((e) => e.id)).toEqual(["casa-tezontle", "casa-umbral", "villa-marea", "casa-brisa", "penthouse-arrecife"]);
+    const a = await svc.rebuildExample("casa-brisa");
+    const b = await svc.rebuildExample("casa-brisa");
+    expect(a.id).toBe("casa-brisa");
+    expect(b.proposals.map((p) => p.id)).toEqual(a.proposals.map((p) => p.id));
+    expect(b.conflicts.map((k) => k.id)).toEqual(a.conflicts.map((k) => k.id));
+    expect(b.versions.map((v) => v.content)).toEqual(a.versions.map((v) => v.content));
+    expect(a.currentVersion).toBe(2);
+    expect(a.changelog.filter((l) => l.version === 2).every((l) => l.approval === "example_seed")).toBe(true);
+  });
 
-    await svc.deleteCampaign(cs[0].id);
-    await svc.ensureExamples();
-    expect((await svc.listCampaigns())).toHaveLength(4);
-    expect(await svc.seedExamples()).toBe(1);
-    expect((await svc.listCampaigns())).toHaveLength(5);
+  it("rebuilds an example from its id on a cold store", async () => {
+    const c = await svc.findCampaign("villa-marea");
+    expect(c?.brief.name).toBe("Villa Marea");
+    expect(await svc.findCampaign("not-a-campaign")).toBeNull();
+  });
+
+  it("stores the five examples under fixed ids and removes legacy random-id examples", async () => {
+    const { store } = await import("@/lib/server/store");
+    const legacy = { ...(await svc.rebuildExample("casa-umbral")), id: "cmp_legacy01" };
+    await store().putCampaign(legacy);
+    expect(await svc.ensureExamples()).toBe(5);
+    const cs = await svc.listCampaigns();
+    expect(cs.map((c) => c.id).sort()).toEqual([...EXAMPLES.map((e) => e.id)].sort());
+    expect(await svc.ensureExamples()).toBe(0);
+  });
+
+  it("refuses to delete examples", async () => {
+    await expect(svc.deleteCampaign("casa-tezontle")).rejects.toMatchObject({ status: 403 });
   });
 
   it("excludes seed activity from workflow metrics", async () => {
-    const m = computeMetrics((await svc.listCampaigns()), (await svc.listEvents()));
+    const m = computeMetrics(await svc.listCampaigns(), await svc.listEvents());
     expect(m.campaigns).toBe(0);
     expect(m.exampleCampaigns).toBe(5);
     expect(m.timeToFirstDraftMs).toBeNull();

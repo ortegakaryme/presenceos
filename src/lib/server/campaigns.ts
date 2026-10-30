@@ -12,8 +12,10 @@ import { validateValue, validationContext } from "@/lib/builder/validation";
 import { AGENT_LABEL } from "@/lib/builder/conflicts";
 import { runQA } from "@/lib/qa/checks";
 import { forwardEvent, type AnalyticsEvent, type EventName } from "@/lib/analytics/events";
-import { store } from "./store";
-import { EXAMPLES } from "@/lib/domain/examples";
+import { sharedStore, storageMode, store } from "./store";
+import { EXAMPLES, isExampleId } from "@/lib/domain/examples";
+import { newOverlay, requestContext, type Overlay } from "./context";
+import { sequentialIds } from "@/lib/ids";
 
 export { WorkflowError };
 
@@ -35,16 +37,23 @@ async function track(name: EventName, campaignId: string | undefined, props: Rec
 
 /* ----------------------------- reads ----------------------------- */
 
+/** All campaigns visible to this request; examples are always present (rebuilt if needed). */
 export async function listCampaigns(): Promise<Campaign[]> {
-  return (await store().listCampaigns()).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  const list = await store().listCampaigns();
+  const ids = new Set(list.map((c) => c.id));
+  for (const ex of EXAMPLES) if (!ids.has(ex.id)) list.push(await builtExample(ex.id));
+  return list.filter((c) => c.origin !== "example" || isExampleId(c.id)).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 }
 
+/** Finds a campaign; an example is rebuilt from its fixed id when this instance has no copy. */
 export async function findCampaign(id: string): Promise<Campaign | null> {
-  return store().getCampaign(id);
+  const c = await store().getCampaign(id);
+  if (c || !isExampleId(id)) return c;
+  return builtExample(id);
 }
 
 export async function getCampaign(id: string): Promise<Campaign> {
-  const c = await store().getCampaign(id);
+  const c = await findCampaign(id);
   if (!c) throw new WorkflowError("Campaign not found.", 404);
   return c;
 }
@@ -57,7 +66,7 @@ export async function listEvents(): Promise<AnalyticsEvent[]> {
 async function mutate<T>(id: string, fn: (c: Campaign, events: AnalyticsEvent[]) => T): Promise<T> {
   const s = store();
   return s.withLock(`campaign:${id}`, async () => {
-    const c = await s.getCampaign(id);
+    const c = await findCampaign(id);
     if (!c) throw new WorkflowError("Campaign not found.", 404);
     const events: AnalyticsEvent[] = [];
     const result = fn(c, events);
@@ -70,7 +79,7 @@ async function mutate<T>(id: string, fn: (c: Campaign, events: AnalyticsEvent[])
 
 /* ----------------------------- intake ----------------------------- */
 
-export async function createCampaign(input: unknown, opts: { start?: boolean; injectFailure?: boolean; origin?: "user" | "example"; delayMs?: number } = {}) {
+export async function createCampaign(input: unknown, opts: { start?: boolean; injectFailure?: boolean; origin?: "user" | "example"; delayMs?: number; id?: string } = {}) {
   const parsed = PropertyBriefSchema.safeParse(input);
   if (!parsed.success) {
     const fieldErrors: Record<string, string> = {};
@@ -94,7 +103,7 @@ export async function createCampaign(input: unknown, opts: { start?: boolean; in
   const origin = opts.origin ?? "user";
   const seedProps = origin === "example" ? { source: "seed" } : {};
   const campaign: Campaign = {
-    id: newId("cmp"),
+    id: opts.id ?? newId("cmp"),
     origin,
     createdAt: at,
     updatedAt: at,
@@ -400,6 +409,7 @@ export async function restore(campaignId: string, versionNumber: number) {
 }
 
 export async function deleteCampaign(campaignId: string) {
+  if (isExampleId(campaignId)) throw new WorkflowError("Example campaigns can't be deleted.", 403);
   const s = store();
   await s.withLock(`campaign:${campaignId}`, async () => {
     if (!(await s.deleteCampaign(campaignId))) throw new WorkflowError("Campaign not found.", 404);
@@ -413,40 +423,98 @@ export async function recordClientEvent(name: EventName, campaignId: string | un
 
 /* ----------------------------- example campaigns ----------------------------- */
 
-let seeding: Promise<number> | null = null;
+// Shared by every route bundle in this process (each bundle has its own module instances).
+const exampleCache: Map<string, Promise<Campaign>> = ((globalThis as unknown as { __presenceExamples?: Map<string, Promise<Campaign>> }).__presenceExamples ??= new Map());
 
 /**
- * Adds the preloaded example campaigns that are missing (matched by property name among examples). Agents really
- * run for each example; for most examples the Builder's validation-passed recommendations are then
- * pre-applied and labelled as seeded, so the live pages are populated. Seed activity is tagged and
- * excluded from workflow metrics.
+ * Builds an example campaign from its fixed id: agents really run, in an isolated context with a
+ * deterministic id sequence, so every server instance produces the same campaign (same proposal,
+ * conflict and changelog ids). For most examples the Builder's validation-passed recommendations
+ * are then pre-applied and labelled as seeded. Seed activity is excluded from workflow metrics.
  */
-export async function seedExamples(): Promise<number> {
-  // In-process de-duplication plus a store lock, so two serverless instances cannot seed twice.
-  seeding ??= store().withLock("seed", async () => {
-    // Only examples count as "already present" — a user's own campaign with the same name doesn't.
-    const existing = new Set((await listCampaigns()).filter((c) => c.origin === "example").map((c) => c.brief.name));
-    let added = 0;
-    for (const ex of EXAMPLES) {
-      if (existing.has(ex.brief.name)) continue;
-      const { campaign, run } = await createCampaign(ex.brief, { origin: "example", delayMs: 0 });
-      await run?.completion;
-      if (ex.preApply) {
-        await approveRecommended(campaign.id, { seed: true });
-        await applyChanges(campaign.id).catch(() => undefined);
-      }
-      added++;
+async function buildExample(id: string): Promise<Campaign> {
+  const ex = EXAMPLES.find((e) => e.id === id);
+  if (!ex) throw new WorkflowError("Unknown example.", 404);
+  const overlay = newOverlay([], false);
+  return requestContext.run({ overlay, nextId: sequentialIds(ex.id) }, async () => {
+    const { run } = await createCampaign(ex.brief, { origin: "example", delayMs: 0, id: ex.id });
+    await run?.completion;
+    if (ex.preApply) {
+      await approveRecommended(ex.id, { seed: true });
+      await applyChanges(ex.id).catch(() => undefined);
     }
-    await store().setMeta({ ...(await store().getMeta()), examplesSeededAt: nowIso() });
-    return added;
-  }).finally(() => {
-    seeding = null;
+    const c = overlay.campaigns.get(ex.id);
+    if (!c) throw new Error(`Example ${ex.id} was not built`);
+    return c;
   });
-  return seeding;
 }
 
-/** Seeds examples once per workspace. Deleted examples are not re-added automatically. */
-export async function ensureExamples(): Promise<void> {
-  if ((await store().getMeta()).examplesSeededAt) return;
-  await seedExamples();
+/** Uncached build — exported for determinism tests. */
+export const rebuildExample = buildExample;
+
+/** Built example (memoised per instance). Returns a copy. */
+export async function builtExample(id: string): Promise<Campaign> {
+  if (!exampleCache.has(id)) exampleCache.set(id, buildExample(id).catch((e) => { exampleCache.delete(id); throw e; }));
+  return structuredClone(await exampleCache.get(id)!);
+}
+
+/**
+ * Makes sure the shared store holds every example under its fixed id, and removes example
+ * campaigns created by older versions (random ids). No-op in browser mode, where examples are
+ * rebuilt on demand and visitors keep their own copies.
+ */
+export async function ensureExamples(): Promise<number> {
+  if (storageMode() === "browser") return 0;
+  const s = sharedStore();
+  return s.withLock("seed", async () => {
+    let added = 0;
+    for (const c of await s.listCampaigns()) if (c.origin === "example" && !isExampleId(c.id)) await s.deleteCampaign(c.id);
+    for (const ex of EXAMPLES) {
+      if (await s.getCampaign(ex.id)) continue;
+      await s.putCampaign(await builtExample(ex.id));
+      added++;
+    }
+    return added;
+  });
+}
+
+/** Re-adds missing examples. Kept for the /api/examples route. */
+export async function seedExamples(): Promise<number> {
+  return ensureExamples();
+}
+
+/* ----------------------------- browser-held state ----------------------------- */
+
+export interface BrowserState {
+  campaigns: Campaign[];
+  deleted: string[];
+  events: AnalyticsEvent[];
+}
+
+function looksLikeCampaign(x: unknown): x is Campaign {
+  const c = x as Campaign;
+  return !!c && typeof c === "object" && typeof c.id === "string" && Array.isArray(c.versions) && Array.isArray(c.proposals) && Array.isArray(c.runs) && PropertyBriefSchema.safeParse(c.brief).success;
+}
+
+/**
+ * In browser mode, runs `fn` against the campaign copy the browser sent (examples fall back to the
+ * rebuilt originals) and returns what changed, for the browser to save. In server mode it just runs `fn`.
+ * Browser-sent state is only ever used to compute a response for that same browser; it is never stored.
+ */
+export async function withBrowserState<T>(raw: unknown, fn: () => Promise<T>): Promise<{ result: T; state?: BrowserState }> {
+  if (storageMode() !== "browser") return { result: await fn() };
+  const sent = (raw as { campaigns?: unknown[] } | undefined)?.campaigns ?? [];
+  if (!Array.isArray(sent) || sent.length > 5) throw new WorkflowError("Invalid browser state.");
+  const campaigns = sent.filter(looksLikeCampaign);
+  if (campaigns.length !== sent.length) throw new WorkflowError("Invalid campaign data in browser state.");
+  const overlay: Overlay = newOverlay(campaigns, true);
+  const result = await requestContext.run({ overlay }, fn);
+  return {
+    result,
+    state: {
+      campaigns: [...overlay.touched].map((id) => overlay.campaigns.get(id)).filter((c): c is Campaign => !!c),
+      deleted: [...overlay.deleted],
+      events: overlay.events,
+    },
+  };
 }

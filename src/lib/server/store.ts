@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { Campaign } from "@/lib/domain/schemas";
 import type { AnalyticsEvent } from "@/lib/analytics/events";
+import { requestContext, type Overlay } from "./context";
 
 /**
  * Persistence. Two interchangeable backends:
@@ -29,7 +30,10 @@ export interface StoreBackend {
 }
 
 export function dataDir(): string {
-  return path.resolve(process.env.PRESENCE_DATA_DIR || path.join(/* turbopackIgnore: true */ process.cwd(), ".data"));
+  if (process.env.PRESENCE_DATA_DIR) return path.resolve(process.env.PRESENCE_DATA_DIR);
+  // Serverless deployments can only write to /tmp (per instance, not shared).
+  if (process.env.VERCEL) return "/tmp/presenceos";
+  return path.resolve(path.join(/* turbopackIgnore: true */ process.cwd(), ".data"));
 }
 
 /* ------------------------------- file backend ------------------------------- */
@@ -201,18 +205,88 @@ function redisBackend(cfg: { url: string; token: string }): StoreBackend {
   };
 }
 
+/* ------------------------------ overlay backend ----------------------------- */
+
+/** Works on the request's working copy; never writes through to the base store. */
+function overlayBackend(o: Overlay, base: StoreBackend): StoreBackend {
+  return {
+    kind: base.kind,
+    async getCampaign(id) {
+      if (o.deleted.has(id)) return null;
+      const c = o.campaigns.get(id) ?? (o.readThrough ? await base.getCampaign(id) : null);
+      return c ? structuredClone(c) : null;
+    },
+    async listCampaigns() {
+      const fromBase = o.readThrough ? await base.listCampaigns() : [];
+      const merged = new Map(fromBase.map((c) => [c.id, c]));
+      for (const [id, c] of o.campaigns) merged.set(id, c);
+      return structuredClone([...merged.values()].filter((c) => !o.deleted.has(c.id)));
+    },
+    async putCampaign(c) {
+      o.campaigns.set(c.id, structuredClone(c));
+      o.touched.add(c.id);
+      o.deleted.delete(c.id);
+    },
+    async deleteCampaign(id) {
+      const existed = o.campaigns.has(id) || (o.readThrough && !!(await base.getCampaign(id)));
+      o.campaigns.delete(id);
+      o.touched.delete(id);
+      o.deleted.add(id);
+      return existed;
+    },
+    async appendEvents(events) {
+      o.events.push(...events);
+    },
+    async listEvents() {
+      return structuredClone(o.events);
+    },
+    async getMeta() {
+      return o.readThrough ? base.getMeta() : {};
+    },
+    async setMeta() {
+      // Overlay contexts never change workspace metadata.
+    },
+    async withLock(key, fn) {
+      const prev = o.locks.get(key) ?? Promise.resolve();
+      const next = prev.then(fn, fn);
+      o.locks.set(key, next.catch(() => undefined));
+      return next;
+    },
+  };
+}
+
 /* --------------------------------- selection -------------------------------- */
 
 const gb = globalThis as unknown as { __presenceBackend?: { key: string; backend: StoreBackend } };
 
-export function store(): StoreBackend {
+function baseStore(): StoreBackend {
   const cfg = redisConfig();
   const key = cfg ? `redis:${cfg.url}` : `file:${dataDir()}`;
   if (gb.__presenceBackend?.key !== key) gb.__presenceBackend = { key, backend: cfg ? redisBackend(cfg) : fileBackend() };
   return gb.__presenceBackend.backend;
 }
 
+export function store(): StoreBackend {
+  const o = requestContext.getStore()?.overlay;
+  return o ? overlayBackend(o, baseStore()) : baseStore();
+}
+
+/** The shared store, ignoring any request overlay (used to cache example campaigns). */
+export function sharedStore(): StoreBackend {
+  return baseStore();
+}
+
+/**
+ * "server": campaigns live in a store every request can reach (local file in one long-running
+ * process, or Redis). "browser": a serverless host without Redis — instances do not share memory or
+ * disk, so each browser keeps its own campaigns in localStorage and sends them with each action.
+ */
+export function storageMode(): "server" | "browser" {
+  if (redisConfig()) return "server";
+  return process.env.VERCEL || process.env.PRESENCE_STORAGE === "browser" ? "browser" : "server";
+}
+
 /** Uploaded photos are stored on local disk, which serverless hosts do not persist. */
 export function uploadsEnabled(): boolean {
-  return store().kind === "file" && !process.env.VERCEL;
+  return baseStore().kind === "file" && storageMode() === "server";
 }

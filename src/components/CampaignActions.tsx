@@ -3,10 +3,12 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { api } from "@/lib/client/api";
+import { getStorageMode } from "@/lib/client/mode";
+import { removeLocalCampaign } from "@/lib/client/localStore";
 import { Button } from "./ui";
 
 /** Two-step delete: the first click asks for confirmation, the second deletes. */
-export function DeleteCampaignButton({ id, name, redirectTo, size = "sm" }: { id: string; name: string; redirectTo?: string; size?: "sm" | "md" }) {
+export function DeleteCampaignButton({ id, name, redirectTo, size = "sm", onDeleted }: { id: string; name: string; redirectTo?: string; size?: "sm" | "md"; onDeleted?: () => void }) {
   const router = useRouter();
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -34,7 +36,10 @@ export function DeleteCampaignButton({ id, name, redirectTo, size = "sm" }: { id
         onClick={async () => {
           setBusy(true);
           try {
-            await api(`/api/campaigns/${id}`, { method: "DELETE" });
+            // In browser-storage mode the campaign only exists in this browser.
+            if (getStorageMode() === "browser") removeLocalCampaign(id);
+            else await api(`/api/campaigns/${id}`, { method: "DELETE" });
+            onDeleted?.();
             if (redirectTo) router.push(redirectTo);
             router.refresh();
           } catch (e) {

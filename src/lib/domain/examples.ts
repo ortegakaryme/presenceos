@@ -236,6 +236,8 @@ const ARRECIFE: PropertyBriefInput = {
 };
 
 export interface ExampleCampaign {
+  /** Fixed campaign id — example URLs never change. */
+  id: string;
   key: string;
   label: string;
   brief: PropertyBriefInput;
@@ -244,9 +246,14 @@ export interface ExampleCampaign {
 }
 
 export const EXAMPLES: ExampleCampaign[] = [
-  { key: "cdmx", label: "Ciudad de México", brief: SAMPLE_BRIEF, preApply: false },
-  { key: "valle", label: "Valle de Bravo", brief: UMBRAL, preApply: true },
-  { key: "vallarta", label: "Puerto Vallarta", brief: MAREA, preApply: true },
-  { key: "acapulco", label: "Acapulco", brief: BRISA, preApply: true },
-  { key: "cancun", label: "Cancún", brief: ARRECIFE, preApply: true },
+  { id: "casa-tezontle", key: "cdmx", label: "Ciudad de México", brief: SAMPLE_BRIEF, preApply: false },
+  { id: "casa-umbral", key: "valle", label: "Valle de Bravo", brief: UMBRAL, preApply: true },
+  { id: "villa-marea", key: "vallarta", label: "Puerto Vallarta", brief: MAREA, preApply: true },
+  { id: "casa-brisa", key: "acapulco", label: "Acapulco", brief: BRISA, preApply: true },
+  { id: "penthouse-arrecife", key: "cancun", label: "Cancún", brief: ARRECIFE, preApply: true },
 ];
+
+export const EXAMPLE_IDS = new Set(EXAMPLES.map((e) => e.id));
+export function isExampleId(id: string): boolean {
+  return EXAMPLE_IDS.has(id);
+}

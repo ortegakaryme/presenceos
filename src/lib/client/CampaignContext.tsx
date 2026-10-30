@@ -3,6 +3,8 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import type { Campaign } from "@/lib/domain/schemas";
 import { api } from "./api";
+import { getStorageMode } from "./mode";
+import { getLocalCampaign } from "./localStore";
 
 interface Ctx {
   campaign: Campaign;
@@ -25,6 +27,14 @@ export function CampaignProvider({ initial, children }: { initial: Campaign; chi
   const idRef = useRef(initial.id);
 
   const refresh = useCallback(async () => {
+    // Browser-storage mode: this browser's copy is the source of truth when it has one.
+    if (getStorageMode() === "browser") {
+      const local = getLocalCampaign(idRef.current);
+      if (local) {
+        setCampaign(local);
+        return;
+      }
+    }
     try {
       setCampaign(await api<Campaign>(`/api/campaigns/${idRef.current}`));
     } catch (e) {
@@ -33,7 +43,7 @@ export function CampaignProvider({ initial, children }: { initial: Campaign; chi
   }, []);
 
   useEffect(() => {
-    if (!running) return;
+    if (!running || getStorageMode() === "browser") return;
     const t = setInterval(refresh, 800);
     return () => clearInterval(t);
   }, [running, refresh]);

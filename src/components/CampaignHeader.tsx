@@ -45,7 +45,7 @@ export function CampaignHeader() {
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <DeleteCampaignButton id={c.id} name={c.brief.name} redirectTo="/" />
+            {c.origin !== "example" && <DeleteCampaignButton id={c.id} name={c.brief.name} redirectTo="/" />}
             <a href={`/p/${c.id}?view=draft`} target="_blank" rel="noreferrer" className={buttonClass("secondary", "sm")}>
               Draft preview ↗
             </a>

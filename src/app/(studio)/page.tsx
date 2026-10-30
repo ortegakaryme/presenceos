@@ -1,20 +1,14 @@
-import Link from "next/link";
 import { ensureExamples, listCampaigns } from "@/lib/server/campaigns";
-import { currentContent } from "@/lib/builder/apply";
-import { STAGE_LABEL, criticalOpen, stageOf } from "@/lib/domain/stage";
-import { EXAMPLES } from "@/lib/domain/examples";
+import { storageMode } from "@/lib/server/store";
+import { summarize } from "@/lib/domain/summary";
 import { SAMPLE_BRIEF } from "@/lib/domain/sample";
-import { Badge, ButtonLink, EmptyState, type Tone } from "@/components/ui";
+import { Badge, ButtonLink } from "@/components/ui";
 import { SafeImage } from "@/components/SafeImage";
-import { QuickStart } from "@/components/QuickStart";
-import { DeleteCampaignButton, RestoreExamplesButton } from "@/components/CampaignActions";
-import { formatPrice } from "@/lib/format";
+import { CampaignGrid } from "@/components/CampaignGrid";
 
 export const dynamic = "force-dynamic";
 // First visit to a fresh workspace runs the agents for the five examples.
 export const maxDuration = 60;
-
-const STAGE_TONE: Record<string, Tone> = { intake: "neutral", running: "info", review: "warn", blocked: "bad", ready: "ok", approved: "dark" };
 
 const TIMELINE = [
   { who: "You", title: "Share the brief", phases: ["1 · Intake"], text: "Paste a listing or fill the form. Verified facts are kept apart from claims that still need proof." },
@@ -27,8 +21,6 @@ const TIMELINE = [
 export default async function Overview() {
   await ensureExamples();
   const campaigns = await listCampaigns();
-  const names = new Set(campaigns.filter((c) => c.origin === "example").map((c) => c.brief.name));
-  const missingExamples = EXAMPLES.filter((e) => !names.has(e.brief.name)).length;
   const heroImg = SAMPLE_BRIEF.images[0];
 
   return (
@@ -83,53 +75,11 @@ export default async function Overview() {
         <div className="mb-6 flex flex-wrap items-end justify-between gap-3">
           <div>
             <h2 id="campaigns-h" className="font-display text-3xl text-ink">Campaigns</h2>
-            <p className="mt-1 text-sm text-stone">Examples are fictional and preloaded: agents have already run. Four have the Builder’s recommendations pre-applied (labelled as seeded, not human decisions); Casa Tezontle is waiting for your review.</p>
+            <p className="mt-1 text-sm text-stone">Examples are fictional and preloaded: agents have already run. Four have the Builder’s recommendations pre-applied (labelled as seeded, not human decisions); Casa Tezontle is waiting for your review. Examples can’t be deleted.</p>
           </div>
-          <div className="flex flex-wrap gap-2">
-            <RestoreExamplesButton missing={missingExamples} />
-            <ButtonLink href="/campaigns/new" variant="secondary" size="sm">New campaign</ButtonLink>
-          </div>
+          <ButtonLink href="/campaigns/new" variant="secondary" size="sm">New campaign</ButtonLink>
         </div>
-        {campaigns.length === 0 ? (
-          <EmptyState title="No campaigns" action={<div className="flex flex-wrap justify-center gap-2"><RestoreExamplesButton missing={missingExamples} /><QuickStart variant="secondary" label="Run a sample campaign" /></div>}>
-            You deleted every campaign. Restore the examples or start a new brief.
-          </EmptyState>
-        ) : (
-          <ul className="grid gap-5 sm:grid-cols-2 xl:grid-cols-3">
-            {campaigns.map((c) => {
-              const s = stageOf(c);
-              const pending = c.proposals.filter((p) => p.status === "pending").length;
-              const crit = criticalOpen(c);
-              const content = currentContent(c);
-              const hero = c.brief.images.find((i) => i.id === content.landing.heroImageId) ?? c.brief.images[0];
-              return (
-                <li key={c.id} className="group flex flex-col overflow-hidden rounded-[4px] border border-line bg-paper">
-                  <Link href={`/campaigns/${c.id}`} className="relative block overflow-hidden" tabIndex={-1} aria-hidden>
-                    <SafeImage src={hero?.url} alt="" caption={hero?.caption} sizes="(min-width: 1280px) 30vw, (min-width: 640px) 45vw, 100vw" className="aspect-[16/10] w-full transition-transform duration-700 group-hover:scale-[1.02]" />
-                    {c.origin === "example" && <span className="eyebrow absolute left-3 top-3 bg-paper/90 px-2 py-1 text-[0.6rem] text-umber">Example</span>}
-                  </Link>
-                  <div className="flex flex-1 flex-col p-5">
-                    <p className="eyebrow text-taupe">{c.brief.neighborhood} · {c.brief.city}</p>
-                    <Link href={`/campaigns/${c.id}`} className="font-display mt-1 text-2xl text-ink hover:underline">{c.brief.name}</Link>
-                    <p className="mt-0.5 text-sm text-stone">{formatPrice(c.brief.price.amount, c.brief.price.currency)}</p>
-                    <div className="mt-3 flex flex-wrap items-center gap-1.5 text-xs text-stone">
-                      <Badge tone={STAGE_TONE[s]}>{STAGE_LABEL[s]}</Badge>
-                      <span>v{c.currentVersion}</span>
-                      <span aria-hidden>·</span>
-                      <span>{pending ? `${pending} to review` : "nothing to review"}</span>
-                      {crit > 0 && <><span aria-hidden>·</span><span className="text-bad">{crit} critical</span></>}
-                    </div>
-                    <div className="mt-auto flex flex-wrap items-center gap-2 pt-5">
-                      <ButtonLink href={`/campaigns/${c.id}/${pending ? "review" : "studio"}`} size="sm">{pending ? "Review" : "Open"}</ButtonLink>
-                      <a href={`/p/${c.id}`} target="_blank" rel="noreferrer" className="px-2 text-xs underline underline-offset-2">Live page ↗</a>
-                      <span className="ml-auto"><DeleteCampaignButton id={c.id} name={c.brief.name} /></span>
-                    </div>
-                  </div>
-                </li>
-              );
-            })}
-          </ul>
-        )}
+        <CampaignGrid initial={campaigns.map(summarize)} mode={storageMode()} />
       </section>
     </div>
   );

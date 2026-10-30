@@ -70,7 +70,14 @@ set if none are supplied, and lists what to double-check.
 
 ## Deploy to Vercel
 
-Serverless functions have no persistent disk, so the hosted version stores data in Redis (Upstash, free tier).
+Serverless instances share neither memory nor disk. PresenceOS handles this in one of two ways:
+
+- **Without Redis (default on Vercel): browser storage.** The five examples have fixed ids
+  (`casa-tezontle`, `casa-umbral`, `villa-marea`, `casa-brisa`, `penthouse-arrecife`) and are rebuilt
+  deterministically on any instance, so their links always work. Campaigns a visitor creates — and
+  changes they make to examples — are saved in that visitor's browser (localStorage); each action sends
+  the browser's copy to the server and saves the result. Visitors cannot delete examples.
+- **With Redis (Upstash):** everything is stored server-side and shared across visitors (steps below).
 
 1. Push this repository to GitHub.
 2. In Vercel: **Add New → Project → Import** the repository. Framework preset: Next.js (defaults are fine). Deploy.
